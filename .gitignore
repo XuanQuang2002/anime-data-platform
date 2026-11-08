@@ -11,5 +11,6 @@ metadata/pipeline_state.json
 metadata/runs/
 metadata/*.lock
 metadata/alert_state.json
+metadata/simple_auth_passwords.json
 .pytest_cache/
 .DS_Store
