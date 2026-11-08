@@ -12,7 +12,7 @@ from src.transform import clean_to_silver, check_quality
 from src.load import load_to_gold
 
 default_args = {
-    'owner': 'data_engineer',
+    'owner': 'admin',
     'start_date': datetime(2023, 1, 1),
     'retries': 1,
     'retry_delay': timedelta(minutes=5),
@@ -37,7 +37,7 @@ def print_execution_report(**kwargs):
     print("="*50)
 
 with DAG(
-    'anime_data_pipeline_dag',
+    'anime_backfill_dag',
     default_args=default_args,
     schedule='@daily',
     catchup=False,
