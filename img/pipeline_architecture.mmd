@@ -1,0 +1,20 @@
+graph LR
+    subgraph S1 [Source Systems]
+        Ecommerce[Data Raw<br>•&nbsp;9 CSV Files]
+    end
+    
+    subgraph B [Bronze Layer - Data Lake]
+        Raw[Raw Parquet<br>•&nbsp;9 Parquet Files]
+    end
+
+    subgraph S2 [Silver Layer - Cleaned]
+        Clean[Cleaned Parquet<br>•&nbsp;dim_customers<br>•&nbsp;dim_sellers<br>•&nbsp;dim_products<br>•&nbsp;fct_order_items<br>•&nbsp;fct_order_payments<br>•&nbsp;fct_order_reviews<br>•&nbsp;DLQ Records]
+    end
+    
+    subgraph G [Gold Layer - Data Mart]
+        Star[Star Schema PostgreSQL<br>•&nbsp;dim_customers<br>•&nbsp;dim_sellers<br>•&nbsp;dim_products<br>•&nbsp;fct_order_items<br>•&nbsp;fct_order_payments<br>•&nbsp;fct_order_reviews]
+    end
+
+    S1 -->|Extract| B
+    B -->|Clean & Transform<br>Validate Contracts| S2
+    S2 -->|UPSERT Load| G

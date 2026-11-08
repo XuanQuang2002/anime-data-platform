@@ -1,0 +1,44 @@
+flowchart LR
+    subgraph Raw Data Files
+    C[customers_dataset]
+    G[geolocation_dataset]
+    S[sellers_dataset]
+    P[products_dataset]
+    T[product_category_name_translation]
+    O[orders_dataset]
+    OI[order_items_dataset]
+    OP[order_payments_dataset]
+    OR[order_reviews_dataset]
+    end
+    
+    GeoAgg(Aggregate Geolocation<br>by zip code)
+    JoinOrders(Join Orders<br>Timestamp Validation)
+    
+    subgraph Star Schema Tables
+    DC[(dim_customers)]
+    DS[(dim_sellers)]
+    DP[(dim_products)]
+    FOI[(fct_order_items)]
+    FOP[(fct_order_payments)]
+    FOR[(fct_order_reviews)]
+    end
+    
+    G --> GeoAgg
+    C --> DC
+    GeoAgg --> DC
+    
+    S --> DS
+    GeoAgg --> DS
+    
+    P --> DP
+    T --> DP
+    
+    O --> JoinOrders
+    JoinOrders --> FOI
+    OI --> FOI
+    
+    JoinOrders --> FOP
+    OP --> FOP
+    
+    JoinOrders --> FOR
+    OR --> FOR

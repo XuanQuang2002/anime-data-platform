@@ -1,0 +1,75 @@
+erDiagram
+    fct_order_items {
+        varchar order_id PK
+        int order_item_id PK
+        varchar product_id FK
+        varchar seller_id FK
+        varchar customer_id FK
+        timestamp shipping_limit_date
+        float price
+        float freight_value
+        varchar order_status
+        timestamp order_purchase_timestamp
+        timestamp order_approved_at
+        timestamp order_delivered_carrier_date
+        timestamp order_delivered_customer_date
+        timestamp order_estimated_delivery_date
+    }
+    
+    fct_order_payments {
+        varchar order_id PK
+        int payment_sequential PK
+        varchar customer_id FK
+        varchar payment_type
+        int payment_installments
+        float payment_value
+    }
+    
+    fct_order_reviews {
+        varchar review_id PK
+        varchar order_id PK
+        varchar customer_id FK
+        int review_score
+        text review_comment_title
+        text review_comment_message
+        timestamp review_creation_date
+        timestamp review_answer_timestamp
+    }
+    
+    dim_customers {
+        varchar customer_id PK
+        varchar customer_unique_id
+        varchar customer_zip_code_prefix
+        varchar customer_city
+        varchar customer_state
+        float customer_lat
+        float customer_lng
+    }
+    
+    dim_sellers {
+        varchar seller_id PK
+        varchar seller_zip_code_prefix
+        varchar seller_city
+        varchar seller_state
+        float seller_lat
+        float seller_lng
+    }
+    
+    dim_products {
+        varchar product_id PK
+        varchar product_category_name_english
+        int product_name_length
+        int product_description_length
+        int product_photos_qty
+        int product_weight_g
+        int product_length_cm
+        int product_height_cm
+        int product_width_cm
+    }
+
+    dim_products ||--o{ fct_order_items : "contains"
+    dim_sellers ||--o{ fct_order_items : "sold_by"
+    dim_customers ||--o{ fct_order_items : "ordered_by"
+    
+    dim_customers ||--o{ fct_order_payments : "paid_by"
+    dim_customers ||--o{ fct_order_reviews : "reviewed_by"

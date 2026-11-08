@@ -1,0 +1,12 @@
+polars==1.8.2
+structlog>=26.1.0
+psycopg2-binary>=2.9.11
+faker==28.4.1
+SQLAlchemy>=2.0.50
+pandas==2.3.3
+pyarrow==22.0.0
+apache-airflow-providers-apache-spark==6.0.0
+pyspark==4.1.0
+great_expectations[postgresql]==1.24.1
+requests>=2.32,<3
+pytest>=8,<9

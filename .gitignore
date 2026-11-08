@@ -1,0 +1,15 @@
+.env
+logs/
+*.pyc 
+__pycache__/
+.venv/
+data/raw/
+data/reject/
+data/staging/
+data/reports/
+metadata/pipeline_state.json
+metadata/runs/
+metadata/*.lock
+metadata/alert_state.json
+.pytest_cache/
+.DS_Store
