@@ -57,14 +57,29 @@ query ($after: Int!, $before: Int!, $page: Int!) {
       airingAt
       media {
         id
-        title {
-          romaji
-          english
-        }
+        title { romaji english native }
         format
         status
+        episodes
+        duration
         season
         seasonYear
+        averageScore
+        meanScore
+        popularity
+        favourites
+        genres
+        source
+        isAdult
+        studios {
+          nodes {
+            name
+            isAnimationStudio
+          }
+        }
+        tags { name rank }
+        startDate { year month day }
+        endDate { year month day }
       }
     }
   }
@@ -172,7 +187,10 @@ def fetch_anilist_data(year: int, season: str) -> Path:
     )
     return raw_path
 
-def fetch_anilist_airings(target_date: date) -> Path:
+def fetch_anilist_airings(
+        target_date: date,
+        force_refresh: bool = False,
+    ) -> Path:
     """Fetch schedules for a date and return a path recording the Vietnam pull time."""
     tz = ZoneInfo("Asia/Ho_Chi_Minh")
     start = datetime.combine(
@@ -184,24 +202,55 @@ def fetch_anilist_airings(target_date: date) -> Path:
     after = int(start.timestamp()) - 1
     before = int(end.timestamp())
 
+    if type(force_refresh) is not bool:
+        raise ValueError("force_refresh must be a boolean")
+    
     target_day = target_date.strftime("%Y%m%d")
     raw_dir = RAW_DIR / "anilist" / "airings"
-    raw_path = raw_dir / f"{target_day}.json"
+    prefix = f"{target_day}_"
 
-    if not raw_path.is_file():
-        cached_paths = sorted(raw_dir.glob(f"{target_day}_fetched_*.json"))
+    snapshot_paths = [
+        path
+        for path in raw_dir.glob(f"{prefix}*.json")
+        if path.stem[len(prefix):].isdigit()
+    ]
+    snapshot_paths.sort(
+        key=lambda path: int(path.stem[len(prefix):]),
+        reverse=True,
+    )
+
+    if not force_refresh:
+        cached_paths = snapshot_paths
+
+        if not cached_paths:
+            cached_paths = sorted(
+                raw_dir.glob(f"{target_day}_fetched_*.json"),
+                reverse=True,
+            )
+
+        legacy_path = raw_dir / f"{target_day}.json"
+
         if cached_paths:
             raw_path = cached_paths[0]
+        elif legacy_path.is_file():
+            raw_path = legacy_path
+        else:
+            raw_path = None
 
-    if raw_path.is_file():
-        with raw_path.open("r", encoding="utf-8") as file:
-            json.load(file)
-        logger.info(f"Using cached data from {raw_path}")
-        return raw_path
+        if raw_path is not None:
+            with raw_path.open("r", encoding="utf-8") as file:
+                json.load(file)
+
+            logger.info("Using cached data from %s", raw_path)
+            return raw_path
+
+    revision = 1
+    if snapshot_paths:
+        revision = int(snapshot_paths[0].stem[len(prefix):]) + 1
 
     fetched_at = datetime.now(tz)
-    timestamp = fetched_at.strftime("%Y%m%d_%H%M%S")
-    raw_path = raw_dir / f"{target_day}_fetched_{timestamp}.json"
+    raw_path = raw_dir / f"{target_day}_{revision:02d}.json"
+
     page = 1
     pages = []
     while True:

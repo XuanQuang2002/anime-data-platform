@@ -1,80 +1,122 @@
-from airflow import DAG
-from airflow.operators.empty import EmptyOperator
-from airflow.operators.python import PythonOperator, BranchPythonOperator
-from datetime import datetime, timedelta
-import sys
+from datetime import timedelta
 
-# Add src to path so airflow can import it
-sys.path.append('/opt/airflow/')
+import pendulum
+from airflow.sdk import DAG, Param, get_current_context, task
 
-from src.extract import extract_to_bronze
-from src.transform import clean_to_silver, check_quality
-from src.load import load_to_gold
-
-default_args = {
-    'owner': 'admin',
-    'start_date': datetime(2023, 1, 1),
-    'retries': 1,
-    'retry_delay': timedelta(minutes=5),
-    'email_on_failure': True,
-    'email_on_retry': False,
-    'email': ['data_team@example.com'],
-}
-
-def print_execution_report(**kwargs):
-    """
-    Generate a summary report of the pipeline execution (Monitoring step).
-    """
-    print("="*50)
-    print(" 🚀 ANIME DATA PIPELINE EXECUTION REPORT 🚀")
-    print("="*50)
-    print(f"DAG Run ID: {kwargs['dag_run'].run_id}")
-    print(f"Logical Date: {kwargs['logical_date']}")
-    print("Status: SUCCESS ✅")
-    print("Pipeline has successfully extracted Data Lake files,")
-    print("passed Data Contracts (Great Expectations),")
-    print("and loaded into PostgreSQL Star Schema Data Mart.")
-    print("="*50)
+TIMEZONE = "Asia/Ho_Chi_Minh"
 
 with DAG(
-    'anime_backfill_dag',
-    default_args=default_args,
-    schedule='@daily',
+    dag_id="anime_backfill_dag",
+    start_date=pendulum.datetime(2003, 1, 1, tz=TIMEZONE),
+    schedule=None,
+    max_active_runs=1,
+    default_args={
+        "owner": "admin",
+        "retries": 1,
+        "retry_delay": timedelta(minutes=5),
+    },
     catchup=False,
-    description='End-to-End ETL for Anime Data using Medallion Architecture'
+    params={
+        "year": Param(2025, type="integer", minimum=1900),
+        "season": Param(
+            "SPRING",
+            type="string",
+            enum=["WINTER", "SPRING", "SUMMER", "FALL"],
+        ),
+    }, # type: ignore
+    tags=["anime", "backfill"],
+    description="Fetch one anime season, build silver, and check quality."
 ) as dag:
     
-    # TODO: Khai báo EmptyOperator cho task_id='start'
-    
-    # TODO: Khai báo PythonOperator cho task_id='extract_to_bronze'
-    
-    # TODO: Khai báo PythonOperator cho task_id='transform_to_silver'
-    
-    # TODO: Khai báo BranchPythonOperator cho task_id='check_quality'
-    
-    # TODO: Khai báo PythonOperator cho task_id='load_to_gold'
-    
-    # TODO: Khai báo PythonOperator cho task_id='execution_report' (sử dụng print_execution_report)
-    
-    # TODO: Khai báo EmptyOperator cho task_id='alert_quality'
-    
-    # TODO: Khai báo EmptyOperator cho task_id='end', lưu ý trigger_rule='none_failed'
-    
-    
-    # YOUR CODE HERE
-    # start = ...
-    # t_extract = ...
-    # t_transform = ...
-    # t_branch = ...
-    # t_load = ...
-    # t_report = ...
-    # t_alert = ...
-    # end = ...
-    
-    # TODO: Khai báo sự phụ thuộc (Dataflow) giữa các task
-    # Flow 1: start -> extract -> transform -> branch
-    # Flow 2 (branch success): branch -> load -> report -> end
-    # Flow 3 (branch failed): branch -> alert -> end
-    
-    # YOUR CODE HERE
-    pass
+    @task(pool="anilist_api", multiple_outputs=False)
+    def extract_to_raw() -> dict:
+        """Fetch one season and return its raw path and partition."""
+        from src.extract import extract_backfill
+
+        context = get_current_context()
+        year = context["params"]["year"]
+        season = context["params"]["season"]
+
+        return {
+            "raw_path": extract_backfill(year, season),
+            "partition": f"{year}_{season.lower()}",
+        }
+
+    @task(multiple_outputs=False)
+    def transform_to_silver(source: dict) -> dict:
+        """Build seasonal silver and preserve its source identity."""
+        from src.transform import clean_to_silver
+
+        context = get_current_context()
+
+        result = clean_to_silver(
+            raw_path=source["raw_path"],
+            run_id=f"anime_backfill_dag__{context['run_id']}",
+            record_type="seasonal",
+        )
+
+        result["raw_path"] = source["raw_path"]
+        result["partition"] = source["partition"]
+        return result
+
+    @task(multiple_outputs=False)
+    def quality_check(result: dict) -> dict:
+        """Validate silver and persist a passed or failed quality report."""
+        from src.quality_report import write_quality_report
+        from src.transform import check_quality
+
+        try:
+            quality = check_quality(result)
+
+        except Exception as error:
+            write_quality_report(
+                result,
+                passed=False,
+                error=str(error),
+            )
+            raise
+
+        write_quality_report(result, passed=True)
+        return quality
+
+    @task(pool="anime_gold", multiple_outputs=False)
+    def load_gold(result: dict) -> dict:
+        """Load quality-checked Parquet tables into PostgreSQL."""
+        from src.load import load_to_gold
+
+        return load_to_gold(result)
+
+    @task
+    def execution_report(
+        result: dict,
+        quality: dict,
+        load: dict,
+    ) -> str:
+        """Save source counts and the completed database load outcome."""
+        from src.quality_report import write_execution_report
+
+        return write_execution_report(result, quality, load)
+
+    @task(pool="anime_gold")
+    def update_checkpoint(result: dict, report_path: str) -> str:
+        """Record a successful partition after its report is saved."""
+        from src.quality_report import save_checkpoint
+
+        return save_checkpoint(result, report_path)
+
+    source = extract_to_raw()
+    silver_result = transform_to_silver(source)
+    quality_result = quality_check(silver_result)
+    load_result = load_gold(silver_result)
+
+    quality_result >> load_result
+
+    report_path = execution_report(
+        silver_result,
+        quality_result,
+        load_result,
+    )
+    update_checkpoint(silver_result, report_path)
+
+if __name__=="__main__":
+    dag.test()

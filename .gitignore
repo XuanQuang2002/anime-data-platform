@@ -4,7 +4,8 @@ logs/
 __pycache__/
 .venv/
 data/raw/
-data/reject/
+data/silver/
+data/rejected/
 data/staging/
 data/reports/
 metadata/pipeline_state.json
@@ -14,3 +15,4 @@ metadata/alert_state.json
 metadata/simple_auth_passwords.json
 .pytest_cache/
 .DS_Store
+AGENTS.md

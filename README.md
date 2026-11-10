@@ -1,130 +1,220 @@
-# End-to-End E-Commerce ETL Pipeline (Student Assignment)
+# Anime Data Platform
 
-Yêu cầu: xây dựng ETL Pipeline hoàn chỉnh dựa trên dữ liệu E-commerce (`data/raw`). 
-Nhiệm vụ là thiết kế và cài đặt hệ thống trên để tạo ra một luồng dữ liệu chuẩn Medallion Architecture.
+A learning and portfolio project that collects anime metadata and episode schedules
+from AniList, validates the data, and loads a PostgreSQL star schema.
 
-Gợi ý: Ngoài tự thiết kế học viên có thể tham khảo một khung kiến trúc mẫu bên dưới nhưng cần hoàn thành các đoạn code còn thiếu (được đánh dấu bằng `# TODO`) để cài đặt các phép xử lý trong ETL pipeline.
+The core ETL workflow is implemented. Live API/database acceptance checks are
+required before claiming a verified end-to-end deployment.
 
-## Mục tiêu học tập
+Pending hardening: correct the project database URL, verify the running schema,
+reject incomplete legacy payloads, add an explicit daily refresh option, and add
+the automated test suite. The refresh and test instructions below apply after
+those code changes are added.
 
-1. Áp dụng kiến trúc **Medallion (Bronze, Silver, Gold)**.
-2. Xây dựng DAG bằng **Apache Airflow** để điều phối toàn bộ workflow.
-3. Sử dụng **Polars** để xử lý dữ liệu tốc độ cao thay vì Pandas.
-4. Áp dụng các quy tắc **Data Contract** (VD: `price > 0`, kiểm tra null) và quản lý dữ liệu lỗi qua **DLQ (Dead Letter Queue)**.
-5. Thiết kế Data Mart theo **Star Schema** trên **PostgreSQL** và xử lý kỹ thuật **UPSERT**.
+## Workflow
 
-## Kiến trúc mẫu (Infrastructure Architecture)
+```mermaid
+flowchart LR
+    E["Extract<br/>AniList → immutable JSON"] --> T["Transform<br/>Flatten → normalize → validate"]
+    T --> S["Valid silver Parquet"]
+    T --> X["Rejected Parquet"]
+    S --> Q["Quality check + quality.json"]
+    X --> Q
+    Q -->|Pass| L["Load<br/>Dimensions → bridges → facts"]
+    Q -->|Fail| F["Fail task; block loading"]
+    L --> R["execution.json"]
+    R --> C["pipeline_state.json"]
+```
 
-Hệ thống được thiết lập dựa trên Docker Compose với sơ đồ hạ tầng như sau:
+Airflow runs two independent DAGs:
 
-![Server Architecture](./img/server-architecture.png)
+| DAG | Schedule | Input |
+|---|---|---|
+| `anime_backfill_dag` | Manual | `year` and `season` |
+| `anime_daily_dag` | 00:05, Asia/Ho_Chi_Minh | Scheduled date or manual `target_date` |
 
-- **Airflow Environment**:
-  - **Webserver (Port 8080) & Scheduler**: Hai thành phần chính quản lý và thực thi DAG. Chúng hoạt động độc lập và đồng bộ trạng thái duy nhất qua Metadata DB.
-  - **Metadata DB (Postgres)**: Database trung tâm chứa siêu dữ liệu của Airflow.
-  - **Airflow Init**: Container chạy một lần. Nó sử dụng kết nối thẳng tới Metadata DB (qua SQLAlchemy) để tạo bảng và tài khoản Admin. Sau khi xong việc, container này tự động tắt (exit).
-- **Datamart DB**: Database PostgreSQL chạy ở Port 5432, đóng vai trò Data Mart lưu trữ kết quả đầu ra (Gold layer).
-- **Local Filesystem (`./data`)**: Volume được mount vào Airflow chứa dữ liệu Raw, và thư mục lưu trữ Bronze, Silver, DLQ (dưới định dạng Parquet).
+Each DAG has six tasks: `extract_to_raw`, `transform_to_silver`,
+`quality_check`, `load_gold`, `execution_report`, and `update_checkpoint`.
 
-## Cấu trúc thư mục hiện tại
+## Technology
+
+- Python 3.14 and Apache Airflow 3.4.0, as configured in the Docker image.
+- Requests for AniList GraphQL requests.
+- Polars and Parquet for silver and rejected data.
+- SQLAlchemy and psycopg2 for PostgreSQL upserts.
+- PostgreSQL 18: separate Airflow metadata and anime datamart services.
+- Pytest is listed in requirements; the automated test suite is pending.
+
+Validation uses custom Python functions. Spark services are included in Compose,
+but the current ETL does not run Spark jobs. MAL and personal watchlist ingestion
+are deferred.
+
+## Data rules
+
+- Raw JSON is immutable: existing snapshots are never overwritten or deleted.
+- Normal runs reuse a cached raw snapshot.
+- Planned repair option: manual `force_refresh=true` will save a new daily snapshot
+  and preserve older files after the refresh patch is applied.
+- Optional null values are allowed. A required-field presence check is pending
+  to stop incomplete legacy query results from being loaded as null metadata.
+- Unknown scores are allowed. Present scores must be between 0 and 100.
+- Partial release dates retain known year/month/day components.
+- Invalid and duplicate source records are retained in rejected Parquet.
+- Source reconciliation is `input_count = valid_count + rejected_count`.
+- Any rejected record fails the quality gate and blocks loading.
+- All gold writes share one transaction: dimensions, then bridges, then facts.
+- Checkpoints are saved after the successful execution report.
+
+Daily source counts represent airing events. Several events can share one anime
+row, so relationship-table counts are not added to source reconciliation.
+
+## Storage and modules
 
 ```text
-lab-student-assignment/
-├── dags/
-│   └── ecommerce_etl_dag.py    <-- TODO: Khai báo và kết nối các task
-├── data/
-│   └── raw/                    <-- Chứa dữ liệu CSV nguồn
-├── img/
-├── sql/
-│   └── init_db.sql             <-- TODO: Viết lệnh DDL tạo các bảng cho Gold schema
-├── src/
-│   ├── extract.py              <-- TODO: Viết logic chuyển CSV sang Parquet (Bronze)
-│   ├── transform.py            <-- TODO: Viết logic làm sạch, join, data quality (Silver)
-│   └── load.py                 <-- TODO: Viết logic đọc từ Silver đẩy vào Postgres bằng Upsert (Gold)
-├── docker-compose.yml
-├── Dockerfile
-└── requirements.txt
+dags/
+  anime_backfill_dag.py
+  anime_daily_dag.py
+src/
+  ingestion/
+    anilist_fetcher.py
+    base_fetcher.py
+  extract.py
+  flatten.py
+  transform.py
+  validate.py
+  load.py
+  quality_report.py
+  config.py
+  logger.py
+sql/
+  create_anime_db.sql
+tests/
+  test_pipeline.py              # proposed; not yet added
+data/
+  raw/anilist/
+  silver/<run_id>/<attempt>/
+  rejected/<run_id>/<attempt>/rejected.parquet
+  reports/<run_id>/
+    quality.json
+    execution.json
+metadata/
+  pipeline_state.json
 ```
 
-## Các bước thực hiện (Hướng dẫn làm bài)
+Silver contains `anime.parquet`, `anime_genres.parquet`,
+`anime_studios.parquet`, `anime_tags.parquet`, and `airings.parquet`.
+A retry writes a new silver/rejected attempt directory.
 
-### Bước 1: Khởi tạo và thiết lập CSDL
+## Gold schema
 
-1. Mở file `sql/init_db.sql`.
-2. Dựa vào các TODO comments, hãy hoàn thành các lệnh `CREATE TABLE` để thiết lập Star Schema (gồm các Dimension tables: products, sellers và Fact tables: order_items, order_payments, order_reviews).
-3. Thêm các index cần thiết để tăng tốc độ truy vấn.
+| Table | Business key |
+|---|---|
+| `dim_anime` | AniList ID |
+| `dim_genre` | Genre name |
+| `dim_studio` | Studio name |
+| `dim_tag` | Tag name |
+| `dim_season` | Season and year |
+| `bridge_anime_genre` | Anime and genre IDs |
+| `bridge_anime_studio` | Anime and studio IDs |
+| `bridge_anime_tag` | Anime and tag IDs |
+| `fact_anime_snapshot` | Anime ID and collection date |
+| `fact_anime_airing` | AniList airing ID |
 
-### Bước 2: Viết logic Extract (Bronze Layer)
+`fact_user_watchlist` is defined in SQL but is not populated by these DAGs.
 
-1. Mở file `src/extract.py`.
-2. Điền code vào vị trí `TODO` để sử dụng `polars` đọc các file CSV. Nên sử dụng tham số `ignore_errors=True` khi đọc dữ liệu không hoàn hảo.
-3. Lưu dữ liệu dưới định dạng Parquet vào `BRONZE_DIR` (`/opt/airflow/data/bronze`).
+A snapshot records the score observed when collected. Fetching a 2023 season now
+does not reconstruct its 2023 scores. Scores can change after a title finishes.
 
-### Bước 3: Viết logic Transform (Silver Layer & Data Contract)
+## Local setup
 
-1. Mở file `src/transform.py`.
-2. Đọc các file Parquet từ Bronze layer.
-3. Thực hiện làm sạch dữ liệu:
-   - Loại bỏ trùng lặp (duplicate).
-   - Xử lý giá trị rỗng (null values).
-   - Join các bảng với nhau (như hợp nhất thông tin địa lý).
-4. **Data Contract**:
-   - Khi xử lý `fct_order_items`, đảm bảo `price > 0` và `freight_value >= 0`.
-   - Những dòng không thỏa mãn điều kiện, thay vì bỏ đi, hãy lưu vào thư mục `DLQ_DIR` (`/opt/airflow/data/dlq`).
-5. **Data Quality**: 
-   - Hoàn thiện hàm `check_quality` (mô phỏng Great Expectations). Kiểm tra tính nguyên vẹn (ví dụ `customer_id` không được null, số lượng dòng `> 0`). Nếu fail thì gán `passed = False`.
+Requires Docker Engine/Desktop with Docker Compose v2.
 
-### Bước 4: Viết logic Load (Gold Layer)
+1. For a new checkout, copy `.env.example` to `.env`. Preserve an existing `.env`.
+2. Configure real datamart credentials, `POSTGRES_DB=anime_db`,
+   `POSTGRES_HOST=datamart`, and `POSTGRES_PORT=5432`.
+3. Configure `DATABASE_URL` with driver `postgresql+psycopg2`, host
+   `datamart`, port 5432, and URL-encoded username/password.
+4. Set private Fernet and JWT keys. Keep credentials and generated auth files untracked.
+5. Ensure the mounted directories are writable by the Airflow container user.
 
-1. Mở file `src/load.py`.
-2. Hoàn thiện hàm `upsert_table`: Dùng `to_sql` để đẩy DataFrame vào bảng tạm (temp table) trên PostgreSQL. Sau đó, viết câu lệnh `INSERT ... ON CONFLICT (...) DO UPDATE` để đưa dữ liệu từ bảng tạm vào bảng chính thức.
-3. Đọc dữ liệu từ Silver layer và gọi `upsert_table` để nạp vào cơ sở dữ liệu `datamart`.
-4. *Lưu ý*: Đối với các bảng Fact có chứa thời gian, hãy ép kiểu (cast) về `datetime64[ns]` trước khi đưa vào CSDL.
-
-### Bước 5: Hoàn thiện Airflow DAG
-
-1. Mở file `dags/ecommerce_etl_dag.py`.
-2. Khai báo các Operator (`EmptyOperator`, `PythonOperator`, `BranchPythonOperator`) tương ứng với từng task.
-3. Liên kết các task lại với nhau theo đồ thị dependencies (sử dụng toán tử `>>`):
-   - Workflow thành công: `start -> extract -> transform -> check_quality -> load -> execution_report -> end`
-   - Workflow thất bại Data Quality: `check_quality -> alert_quality -> end`
-
-## Hướng dẫn chạy và kiểm tra (Testing)
-
-Sau khi điền đủ code, làm theo các bước sau để chạy Pipeline:
-
-**1. Cấp quyền cho thư mục dữ liệu:**
+Airflow's `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN` connects to the separate
+`postgres` service. The project's `DATABASE_URL` connects to `datamart`.
 
 ```bash
-chmod -R 777 data
+mkdir -p data logs metadata plugins
+docker compose config --quiet
+docker compose build
+docker compose up -d postgres datamart
+docker compose up airflow-init
+docker compose up -d airflow-webserver airflow-scheduler airflow-processor
 ```
 
-**2. Khởi tạo Airflow metadata và tài khoản mặc định (admin/admin):**
+Open Airflow at http://localhost:8081. Use the credentials generated/configured by
+the Simple Auth Manager; the password file is private.
+
+Create these Airflow pools before triggering the DAGs:
+
+| Pool | Slots |
+|---|---:|
+| `anilist_api` | 1 |
+| `anime_gold` | 1 |
+
+The shared pools serialize API extraction and gold/checkpoint writes across both DAGs.
+
+The anime database is available at `datamart:5432` inside Compose, or
+`localhost:5433` from the host. Use the appropriate hostname and port for the client.
+
+SQL initialization runs only when the datamart data directory is empty. Updating
+`create_anime_db.sql` does not migrate an existing database. Review schema changes
+or explicitly rebuild a disposable datamart; preserve Airflow's metadata volume.
+
+## Run and inspect
+
+- Backfill: manually trigger with, for example,
+  `{"year": 2023, "season": "SPRING"}`.
+- Daily: manually trigger with `{"target_date": "2026-11-10"}`, or unpause
+  for scheduled runs.
+- After adding the refresh patch, repair an incompatible daily cache with the target date and
+  `"force_refresh": true`. Return to `false` for normal reuse and repeat tests.
+
+Inspect `quality.json`, `execution.json`, rejected Parquet, and
+`metadata/pipeline_state.json`. Quality failures save a failed quality report.
+Load failures prevent the successful execution report and checkpoint.
+
+Database affected-row counts are separate from source counts. They do not report
+an inserted/updated split; `null` means the driver did not provide a count.
+
+## Tests
+
+The test suite is not yet added. After adding `tests/test_pipeline.py` and
+rebuilding the image to install pytest, mount the tests into a temporary Airflow container:
 
 ```bash
-docker-compose up airflow-init
+docker compose run --rm --no-deps -T \
+  --volume "$PWD/tests:/opt/airflow/tests:ro" \
+  --entrypoint python airflow-processor \
+  -B -m pytest -q -p no:cacheprovider /opt/airflow/tests
 ```
 
-**3. Bật các service:**
+The proposed tests use temporary files and mocked network/database calls. They cover missing
+fields versus nulls, invalid scores, partial dates, rejected rows, empty days,
+immutable raw files, cache refresh, and load-error propagation.
 
-```bash
-docker-compose up -d
-```
+Live acceptance checks are separate:
 
-**4. Chạy DAG:**
+1. Verify the running gold schema matches the SQL file.
+2. Complete one backfill and one daily run, including reports and checkpoints.
+3. Replay the same cached snapshot: business-key row counts must not grow.
+4. Confirm rejected rows fail quality and block loading.
+5. Compare database contents with the corresponding silver files.
 
-- Mở trình duyệt và truy cập `http://localhost:8080`.
-- Đăng nhập bằng `admin` / `admin`.
-- Tìm DAG `ecommerce_end_to_end_etl`, unpause và bấm **Trigger DAG**.
-- Theo dõi các task. Bấm vào Log của task để xem báo cáo (hoặc xem quá trình Data Quality Check).
+## Current limits
 
-**5. Kiểm tra kết quả trong Data Mart:**
-
-```bash
-# Kết nối vào Postgres container
-docker-compose exec datamart psql -U admin -d ecommerce
-
-# Chạy một vài câu SQL để kiểm tra
-ecommerce=# SELECT COUNT(*) FROM gold.dim_customers;
-ecommerce=# SELECT * FROM gold.fct_order_items LIMIT 5;
-```
+- Daily data describes scheduled airings, not independent confirmation of broadcast.
+  AniList only aims to guarantee future airing data.
+- The current daily query includes full anime metadata.
+- Older-title score refresh is manual through seasonal runs; no recurring refresh
+  policy is implemented.
+- The timestamp guard protects score snapshots. Metadata and airing details follow
+  load order, and old bridge links are retained.
+- The checkpoint records completed partitions; it does not automatically skip them.

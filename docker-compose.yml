@@ -4,7 +4,7 @@ x-airflow-common:
   environment:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW_DATABASE_URL:?Set AIRFLOW_DATABASE_URL in .env}
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-webserver:8080/execution/
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?Set AIRFLOW_JWT_SECRET in .env}
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?Set AIRFLOW_FERNET_KEY in .env}
@@ -15,7 +15,7 @@ x-airflow-common:
     AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/metadata/simple_auth_passwords.json
     PYTHONPATH: /opt/airflow
     ANILIST_USERNAME: ${ANILIST_USERNAME:-BlueBall152}
-    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-admin@1234}@datamart:5432/${POSTGRES_DB:-anime}
+    DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
   volumes:
     - ./metadata:/opt/airflow/metadata
     - ./dags:/opt/airflow/dags
@@ -36,13 +36,13 @@ services:
     image: postgres:18
     container_name: airflow-db-postgres
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
+      POSTGRES_USER: ${AIRFLOW_DB_USER:?Set AIRFLOW_DB_USER in .env}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:?Set AIRFLOW_DB_PASSWORD in .env}
+      POSTGRES_DB: ${AIRFLOW_DB:?Set AIRFLOW_DB in .env}
     volumes:
       - postgres-db-volume:/var/lib/postgresql
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
+      test: ["CMD", "pg_isready", "-U", "${AIRFLOW_DB_USER}"]
       interval: 10s
       retries: 5
       start_period: 5s
@@ -52,16 +52,16 @@ services:
     image: postgres:18
     container_name: anime-db-datamart
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin@1234
-      POSTGRES_DB: anime_db
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
     ports:
       - "5433:5432"
     volumes:
       - datamart-db-volume:/var/lib/postgresql
       - ./sql/create_anime_db.sql:/docker-entrypoint-initdb.d/init_db.sql
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "admin", "-d", "anime_db"]
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 10s
       retries: 5
       start_period: 5s

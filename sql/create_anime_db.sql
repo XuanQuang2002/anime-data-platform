@@ -4,118 +4,144 @@
  -- Core anime metadata — things that rarely change
 CREATE SCHEMA IF NOT EXISTS gold;
 
-CREATE TABLE gold.dim_anime (anime_id SERIAL PRIMARY KEY,
-                                        anilist_id INT NOT NULL UNIQUE, -- AniList's own ID
- title_romaji TEXT, title_english TEXT, title_native TEXT, format TEXT CHECK (format IN ('tv',
-                                                                                         'tv_short',
-                                                                                         'movie', 
-                                                                                         'ova', 
-                                                                                         'ona', 
-                                                                                         'special', 
-                                                                                         'music')), status TEXT CHECK (status IN ('finished', 
-                                                                                                                                  'releasing', 
-                                                                                                                                  'not_yet_released', 
-                                                                                                                                  'cancelled', 
-                                                                                                                                  'hiatus')), source_material TEXT CHECK (source_material IN ('original', 
-                                                                                                                                                                                              'manga', 
-                                                                                                                                                                                              'light_novel', 
-                                                                                                                                                                                              'visual_novel', 
-                                                                                                                                                                                              'video_game', 
-                                                                                                                                                                                              'novel', 
-                                                                                                                                                                                              'doujinshi', 
-                                                                                                                                                                                              'anime', 
-                                                                                                                                                                                              'web_novel', 
-                                                                                                                                                                                              'live_action', 
-                                                                                                                                                                                              'game', 
-                                                                                                                                                                                              'comic', 
-                                                                                                                                                                                              'multimedia_project', 
-                                                                                                                                                                                              'other')), episodes INT, duration_min INT, is_adult BOOLEAN DEFAULT FALSE, -- When we first saw this anime in our pipeline
- created_at TIMESTAMPTZ DEFAULT NOW(),
-                                updated_at TIMESTAMPTZ DEFAULT NOW());
+CREATE TABLE gold.dim_anime (
+        anime_id SERIAL PRIMARY KEY,
+        anilist_id INT NOT NULL UNIQUE, -- AniList's own ID
+        title_romaji TEXT, 
+        title_english TEXT, 
+        title_native TEXT, 
+        format TEXT CHECK (format IN ('tv', 'tv_short', 'movie', 'ova', 'ona', 'special', 'music')), 
+        status TEXT CHECK (status IN ('finished', 'releasing', 'not_yet_released', 'cancelled', 'hiatus')), 
+        source_material TEXT CHECK (source_material IN ('original', 'manga', 'light_novel', 'visual_novel', 'video_game', 'novel', 'doujinshi', 'anime', 'web_novel', 'live_action', 'game', 'comic', 'multimedia_project', 'other')), 
+        episodes INT, 
+        duration_min INT, 
+        is_adult BOOLEAN DEFAULT FALSE,
+        -- Preserve known date components when AniList has no complete date.
+        start_year INT CHECK (start_year BETWEEN 1 AND 9999),
+        start_month INT CHECK (start_month BETWEEN 1 AND 12),
+        start_day INT CHECK (start_day BETWEEN 1 AND 31),
+        start_date DATE,
+        end_year INT CHECK (end_year BETWEEN 1 AND 9999),
+        end_month INT CHECK (end_month BETWEEN 1 AND 12),
+        end_day INT CHECK (end_day BETWEEN 1 AND 31),
+        end_date DATE,
+         -- When we first saw this anime in our pipeline.
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW());
 
 -- ──────────────────────────────────────────────────────────────
  -- Genre lookup — Action, Romance, Comedy, etc.
 -- Separate table because one anime has many genres
 
-CREATE TABLE gold.dim_genre (genre_id SERIAL PRIMARY KEY,
-                                        genre_name TEXT NOT NULL UNIQUE);
+CREATE TABLE gold.dim_genre (
+        genre_id SERIAL PRIMARY KEY,
+        genre_name TEXT NOT NULL UNIQUE);
+
+-- A tag can describe several anime, with a different relevance rank for each.
+CREATE TABLE gold.dim_tag (
+    tag_id SERIAL PRIMARY KEY,
+    tag_name TEXT NOT NULL UNIQUE
+);
 
 -- Studio lookup — Mappa, Ufotable, A-1 Pictures, etc.
 
-CREATE TABLE gold.dim_studio (studio_id SERIAL PRIMARY KEY,
-                                          studio_name TEXT NOT NULL UNIQUE,
-                                                                    is_animation_studio BOOLEAN DEFAULT TRUE);
+CREATE TABLE gold.dim_studio (
+        studio_id SERIAL PRIMARY KEY,
+        studio_name TEXT NOT NULL UNIQUE,
+        is_animation_studio BOOLEAN DEFAULT TRUE);
 
 -- Season lookup — WINTER 2024, SPRING 2024, etc.
 
-CREATE TABLE gold.dim_season (season_id SERIAL PRIMARY KEY,
-                                          season TEXT NOT NULL CHECK (season IN ('winter',
-                                                                                 'spring',
-                                                                                 'summer',
-                                                                                 'fall')), year INT NOT NULL,
-                                                                                                    UNIQUE (season,
-                                                                                                            year));
+CREATE TABLE gold.dim_season (
+        season_id SERIAL PRIMARY KEY,
+        season TEXT NOT NULL CHECK (season IN ('winter',
+                                               'spring',
+                                               'summer',
+                                               'fall')),
+        year INT NOT NULL,
+        UNIQUE (season,year));
 
 -- ============================================================
 -- BRIDGE TABLES (many-to-many)
 -- ============================================================
  -- One anime → many genres, one genre → many anime
 
-CREATE TABLE gold.bridge_anime_genre
-    (anime_id INT NOT NULL REFERENCES gold.dim_anime(anime_id) ON DELETE CASCADE,
-                                                                    genre_id INT NOT NULL REFERENCES gold.dim_genre(genre_id) ON DELETE CASCADE,
-                                                                                                                                   PRIMARY KEY (anime_id,
-                                                                                                                                                genre_id));
+CREATE TABLE gold.bridge_anime_genre (
+        anime_id INT NOT NULL REFERENCES gold.dim_anime(anime_id) ON DELETE CASCADE,
+        genre_id INT NOT NULL REFERENCES gold.dim_genre(genre_id) ON DELETE CASCADE,
+        PRIMARY KEY (anime_id, genre_id));
 
 -- One anime → many studios, one studio → many anime
 
-CREATE TABLE gold.bridge_anime_studio
-    (anime_id INT NOT NULL REFERENCES gold.dim_anime(anime_id) ON DELETE CASCADE,
-                                                                    studio_id INT NOT NULL REFERENCES gold.dim_studio(studio_id) ON DELETE CASCADE,
-                                                                                                                                      is_main_studio BOOLEAN DEFAULT FALSE, -- flag the animation studio
- PRIMARY KEY (anime_id,
-              studio_id));
+CREATE TABLE gold.bridge_anime_studio (
+        anime_id INT NOT NULL REFERENCES gold.dim_anime(anime_id) ON DELETE CASCADE,
+        studio_id INT NOT NULL REFERENCES gold.dim_studio(studio_id) ON DELETE CASCADE,
+        is_main_studio BOOLEAN DEFAULT FALSE, -- flag the animation studio
+        PRIMARY KEY (anime_id, studio_id)
+);
+
+-- Rank belongs to the anime-tag relationship rather than the tag itself.
+CREATE TABLE gold.bridge_anime_tag (
+    anime_id INT NOT NULL
+        REFERENCES gold.dim_anime(anime_id) ON DELETE CASCADE,
+    tag_id INT NOT NULL
+        REFERENCES gold.dim_tag(tag_id) ON DELETE CASCADE,
+    rank SMALLINT CHECK (rank BETWEEN 0 AND 100),
+    PRIMARY KEY (anime_id, tag_id)
+);
 
 -- ============================================================
 -- FACT TABLES
 -- ============================================================
- -- Community scores snapshot — one row per anime per pipeline run
+ -- Community scores snapshot — one row per anime per collection day
 -- This lets you track how scores change over time
 
-CREATE TABLE gold.fact_anime_snapshot (snapshot_id SERIAL PRIMARY KEY,
-                                                     anime_id INT NOT NULL REFERENCES gold.dim_anime(anime_id),
-                                                                                      season_id INT REFERENCES gold.dim_season(season_id), -- Scores (can change each pull)
- average_score NUMERIC(5, 2), -- AniList score out of 100
- mean_score NUMERIC(5, 2),
-            popularity INT, -- number of users with it on list
- favourites INT, -- When this snapshot was taken
- snapshot_date DATE NOT NULL DEFAULT CURRENT_DATE,
-                                     ingested_at TIMESTAMPTZ DEFAULT NOW(), -- Prevent duplicate snapshots on same day for same anime
- UNIQUE (anime_id,
-         snapshot_date));
+CREATE TABLE gold.fact_anime_snapshot (
+        snapshot_id SERIAL PRIMARY KEY,
+        anime_id INT NOT NULL REFERENCES gold.dim_anime(anime_id),
+        season_id INT REFERENCES gold.dim_season(season_id), -- Scores (can change each pull)
+        average_score NUMERIC(5, 2), -- AniList score out of 100
+        mean_score NUMERIC(5, 2),
+        popularity INT, -- number of users with it on list
+        favourites INT, -- When this snapshot was taken
+        snapshot_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        -- Source collection time is separate from the database ingestion time.
+        fetched_at TIMESTAMPTZ NOT NULL,
+        ingested_at TIMESTAMPTZ DEFAULT NOW(), -- Prevent duplicate snapshots on same day for same anime
+        UNIQUE (anime_id, snapshot_date));
+
+-- Keep AniList's airing ID so repeated pulls can upsert the same event.
+CREATE TABLE gold.fact_anime_airing (
+    airing_id INT PRIMARY KEY CHECK (airing_id > 0),
+    anime_id INT NOT NULL REFERENCES gold.dim_anime(anime_id),
+    episode INT NOT NULL CHECK (episode > 0),
+    airing_at TIMESTAMPTZ NOT NULL
+);
 
 -- Your personal watch list — one row per anime you've interacted with
 
-CREATE TABLE gold.fact_user_watchlist (entry_id SERIAL PRIMARY KEY, 
-                                                  anime_id INT NOT NULL REFERENCES gold.dim_anime(anime_id), 
-                                                                                   platform TEXT NOT NULL CHECK (platform IN ('anilist', 
-                                                                                                                              'mal')), username TEXT NOT NULL, -- Your personal data
- my_status TEXT CHECK (my_status IN ('current', 
-                                     'completed', 
-                                     'paused', 
-                                     'dropped', 
-                                     'planning')), my_score NUMERIC(4, 1), -- 0–10 (AniList default)
- my_progress INT, -- episodes watched
- my_repeat INT DEFAULT 0, -- times rewatched
- my_notes TEXT, -- Dates
- my_started_at TIMESTAMPTZ,
- my_completed_at TIMESTAMPTZ,
- my_updated_at TIMESTAMPTZ,
- ingested_at TIMESTAMPTZ DEFAULT NOW(),
-                                 updated_at TIMESTAMPTZ DEFAULT NOW(), -- One entry per anime per platform per user
- UNIQUE (anime_id,
-         platform,
-         username));
+CREATE TABLE gold.fact_user_watchlist (
+        entry_id SERIAL PRIMARY KEY, 
+        anime_id INT NOT NULL REFERENCES gold.dim_anime(anime_id), 
+        platform TEXT NOT NULL CHECK (platform IN ('anilist', 'mal')), 
+        username TEXT NOT NULL, -- Your personal data
+        my_status TEXT CHECK (my_status IN ('current', 
+                                            'completed', 
+                                            'paused', 
+                                            'dropped', 
+                                            'planning')), 
+        my_score NUMERIC(4, 1), -- 0–10 (AniList default)
+        my_progress INT, -- episodes watched
+        my_repeat INT DEFAULT 0, -- times rewatched
+        my_notes TEXT, -- Dates
+        my_started_at TIMESTAMPTZ,
+        my_completed_at TIMESTAMPTZ,
+        my_updated_at TIMESTAMPTZ,
+        ingested_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(), -- One entry per anime per platform per user
+        UNIQUE (anime_id,
+                platform,
+                username));
 
 -- ============================================================
 -- INDEXES (speeds up your most common queries)
