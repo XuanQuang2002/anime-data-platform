@@ -1,9 +1,11 @@
 from src.logger import get_logger
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from src.ingestion.anilist_fetcher import (
     fetch_anilist_data,
     fetch_anilist_airings,
+    fetch_anilist_year
 )
 
 logger = get_logger("extract")
@@ -28,3 +30,13 @@ def extract_daily(
         )
     )
 
+def extract_year(year: int) -> dict:
+    """Extract one release year and return its raw path and partition."""
+    raw_path = fetch_anilist_year(year)
+
+    return {
+        "year": year,
+        "partition": str(year),
+        "record_type": "yearly",
+        "raw_path": str(raw_path),
+    }

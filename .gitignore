@@ -8,6 +8,7 @@ data/silver/
 data/rejected/
 data/staging/
 data/reports/
+data/bronze/
 metadata/pipeline_state.json
 metadata/runs/
 metadata/*.lock

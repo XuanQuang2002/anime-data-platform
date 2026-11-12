@@ -9,6 +9,41 @@ from src.logger import get_logger
 
 logger = get_logger("anilist_fetcher")
 
+YEARLY_QUERY = """
+query ($yearPrefix: String!, $page: Int!, $perPage: Int!) {
+  Page(page: $page, perPage: $perPage) {
+    pageInfo {
+      hasNextPage
+    }
+    media(
+      type: ANIME
+      startDate_like: $yearPrefix
+      sort: ID
+    ) {
+      id
+      title { romaji english native }
+      format
+      status
+      episodes
+      duration
+      season
+      seasonYear
+      averageScore
+      meanScore
+      popularity
+      favourites
+      genres
+      source
+      isAdult
+      studios { nodes { name isAnimationStudio } }
+      tags { name rank }
+      startDate { year month day }
+      endDate { year month day }
+    }
+  }
+}
+"""
+
 SEASONAL_QUERY = """
 query ($season: MediaSeason, $year: Int, $page: Int, $perPage: Int) {
   Page(page: $page, perPage: $perPage) {
@@ -295,5 +330,130 @@ def fetch_anilist_airings(
     )
     return raw_path
 
-if __name__ == "__main__":
-    fetch_anilist_data(2023, "WINTER")
+def fetch_anilist_year(year: int) -> Path:
+    """Fetch anime by first-release year into one immutable yearly JSON."""
+    fetched_at = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh"))
+
+    if type(year) is not int or not (1900 <= year <= fetched_at.year):
+        raise ValueError(
+            f"year must be an integer between 1900 and {fetched_at.year}"
+        )
+
+    selection = "start_date_year"
+    year_prefix = f"{year}%"
+    raw_dir = RAW_DIR / "yearly" / str(year)
+    today = fetched_at.strftime("%Y%m%d")
+
+    cached_paths = sorted(
+        raw_dir.glob(f"{today}_*.json"),
+        reverse=True
+    )
+
+    if cached_paths:
+        raw_path = cached_paths[0]
+
+        with raw_path.open("r", encoding="utf-8") as file:
+            cached = json.load(file)
+
+        if (
+            not isinstance(cached, dict)
+            or cached.get("year") != year
+            or cached.get("selection") != selection
+            or not isinstance(cached.get("pages"), list)
+            or not cached["pages"]
+        ):
+            raise ValueError(
+                "Yearly cache is invalid or uses a different selection: "
+                f"{raw_path}"
+            )
+        logger.info("Using yearly raw cache: %s", raw_path)
+        return raw_path
+    page = 1
+    pages = []
+
+    while True:
+        logger.info(
+            "Fetching AniList year=%s page=%s",
+            year,
+            page,
+        )
+
+        payload = fetch_data(
+            method="POST",
+            url=ANILIST_URL,
+            min_request_interval=ANILIST_RATE_LIMIT_SLEEP,
+            json={
+                "query": YEARLY_QUERY,
+                "variables": {
+                    "yearPrefix": year_prefix,
+                    "page": page,
+                    "perPage": 50,
+                },
+            },
+        )
+
+        if not isinstance(payload, dict):
+            raise RuntimeError(
+                f"Invalid AniList response on page {page}"
+            )
+
+        if payload.get("errors"):
+            raise RuntimeError(
+                f"AniList GraphQL errors: {payload['errors']}"
+            )
+
+        try:
+            page_data = payload["data"]["Page"]
+            has_next_page = page_data["pageInfo"]["hasNextPage"]
+            media = page_data["media"]
+        except (KeyError, TypeError) as error:
+            raise RuntimeError(
+                f"Unexpected AniList response on page {page}"
+            ) from error
+
+        if (
+            type(has_next_page) is not bool
+            or not isinstance(media, list)
+        ):
+            raise RuntimeError(
+                f"Invalid AniList page fields on page {page}"
+            )
+
+        pages.append(media)
+
+        if not has_next_page:
+            break
+
+        # AniList documents a maximum pagination depth of 5,000 entries.
+        if page >= 100:
+            raise RuntimeError(
+                "Yearly extraction reached AniList's 5,000-entry limit. "
+                "Split the query before treating this year as complete."
+            )
+
+        # Increment page for the next iteration
+        page += 1
+
+    raw_path = (
+        raw_dir
+        / f"{fetched_at.strftime('%Y%m%d_%H%M%S')}.json"
+    )
+
+    store_data_raw_payload(
+        payload={
+            "year": year,
+            "selection": selection,
+            "year_prefix": year_prefix,
+            "fetched_at": fetched_at.isoformat(timespec="seconds"),
+            "pages": pages,
+        },
+        path=raw_path
+    )
+    logger.info(
+        "Yearly extraction complete: year=%s pages=%s path=%s",
+        year,
+        len(pages),
+        raw_path,
+    )
+    return raw_path
+
